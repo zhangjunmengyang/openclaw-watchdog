@@ -30,11 +30,15 @@
 # === State ===
 _cs_last_checksum=""
 _cs_flag_file=""
+_cs_last_good=""
 _cs_healthy_since=0
+_cs_change_grace=${CONFIG_CHANGE_GRACE:-15}
 
 # === Paths ===
 _cs_init() {
     _cs_flag_file="${WATCHDOG_STATE_DIR}/rollback-armed.flag"
+
+    _cs_last_good="${WATCHDOG_STATE_DIR}/openclaw.last-good.json"
 
     # Load last known checksum
     local cs_file="${WATCHDOG_STATE_DIR}/config-checksum"
@@ -46,6 +50,14 @@ _cs_init() {
     fi
 
     # Check for orphaned flag (watchdog was restarted while flag armed)
+
+
+    # Ensure last-good snapshot exists
+    if [[ -f "${CONFIG_PATH}" && ! -f "${_cs_last_good}" ]]; then
+        cp "${CONFIG_PATH}" "${_cs_last_good}" 2>/dev/null || true
+        log_info "SAFEGUARD: initialized last-good from current config"
+    fi
+
     if [[ -f "${_cs_flag_file}" ]]; then
         log_warn "SAFEGUARD: found armed rollback flag from previous run"
         _cs_check_armed_flag
@@ -114,6 +126,7 @@ _cs_read_flag() {
     [[ -f "${_cs_flag_file}" ]] || return 1
     _cs_armed_deadline="$(sed -n '1p' "${_cs_flag_file}")"
     _cs_armed_snapshot="$(sed -n '2p' "${_cs_flag_file}")"
+    _cs_armed_at="$(sed -n '3p' "${_cs_flag_file}" 2>/dev/null || echo 0)"
     [[ -n "${_cs_armed_deadline}" && -n "${_cs_armed_snapshot}" ]]
 }
 
@@ -158,6 +171,9 @@ config_safeguard_rollback() {
     cp "${snapshot}" "${CONFIG_PATH}"
     log_info "SAFEGUARD: config restored from $(basename "${snapshot}")"
 
+    # Update last-good to restored config
+    cp "${snapshot}" "${_cs_last_good}" 2>/dev/null || true
+
     # Update checksum to match restored config
     _cs_last_checksum="$(file_checksum "${CONFIG_PATH}")"
     echo "${_cs_last_checksum}" > "${WATCHDOG_STATE_DIR}/config-checksum"
@@ -177,6 +193,14 @@ config_safeguard_confirm() {
         echo "No pending rollback to confirm."
         return 0
     fi
+    # Persist last-good and checksum
+    if [[ -f "${CONFIG_PATH}" ]]; then
+        cp "${CONFIG_PATH}" "${_cs_last_good}" 2>/dev/null || true
+        _cs_last_checksum="$(file_checksum "${CONFIG_PATH}")"
+        echo "${_cs_last_checksum}" > "${WATCHDOG_STATE_DIR}/config-checksum"
+        log_info "SAFEGUARD: updated last-good after manual confirm"
+    fi
+
     _cs_disarm
     log_info "SAFEGUARD: config confirmed by user"
     echo "Config confirmed. Rollback timer cleared."
@@ -190,6 +214,12 @@ _cs_check_armed_flag() {
     local now
     now="$(now_epoch)"
 
+    # Grace period after arming: gateway may be restarting
+    if [[ -n "${_cs_armed_at:-}" ]] && (( now - _cs_armed_at < _cs_change_grace )); then
+        log_info "SAFEGUARD: grace period (${_cs_change_grace}s) - skip health enforcement"
+        return
+    fi
+
     # Check gateway health
     if gateway_process_alive && gateway_healthy; then
         if (( _cs_healthy_since == 0 )); then
@@ -199,7 +229,16 @@ _cs_check_armed_flag() {
 
         # Check if deadline passed while healthy → auto-confirm
         if (( now >= _cs_armed_deadline )); then
-            log_info "SAFEGUARD: timeout reached, gateway healthy throughout → AUTO-CONFIRM"
+            log_info "SAFEGUARD: timeout reached, gateway healthy throughout -> AUTO-CONFIRM"
+
+            # Persist last-good and checksum
+            if [[ -f "${CONFIG_PATH}" ]]; then
+                cp "${CONFIG_PATH}" "${_cs_last_good}" 2>/dev/null || true
+                _cs_last_checksum="$(file_checksum "${CONFIG_PATH}")"
+                echo "${_cs_last_checksum}" > "${WATCHDOG_STATE_DIR}/config-checksum"
+                log_info "SAFEGUARD: updated last-good after confirm"
+            fi
+
             _cs_disarm
         fi
     else
@@ -238,18 +277,21 @@ config_safeguard_tick() {
     if [[ "${current_checksum}" != "${_cs_last_checksum}" ]]; then
         log_warn "SAFEGUARD: config change detected! (checksum: ${_cs_last_checksum:0:12}... -> ${current_checksum:0:12}...)"
 
-        # Snapshot the PREVIOUS config (which was the known-good one)
-        # But we only have the new file now. The previous version should already
-        # be in our snapshot history. If not, we snapshot what we have.
-        local snapshot
-        snapshot="$(config_safeguard_snapshot "pre-change")"
-
-        # Wait a moment for gateway to restart with new config
-        # (OpenClaw typically auto-restarts on config change)
-        sleep 10
-
-        # Arm rollback
-        _cs_arm_rollback "${snapshot}"
+        # Arm rollback using an immutable snapshot of last-known-good config
+        if [[ -f "${_cs_last_good}" ]]; then
+            local snapshot
+            snapshot="$(date '+%Y%m%d-%H%M%S')"
+            snapshot="${WATCHDOG_SNAPSHOT_DIR}/openclaw-${snapshot}-last-good.json"
+            cp "${_cs_last_good}" "${snapshot}" 2>/dev/null || true
+            log_info "SAFEGUARD: captured last-good snapshot -> ${snapshot}"
+            _cs_prune_snapshots
+            _cs_arm_rollback "${snapshot}"
+        else
+            # Fallback: if last-good missing, snapshot current
+            local snapshot
+            snapshot="$(config_safeguard_snapshot "fallback")"
+            _cs_arm_rollback "${snapshot}"
+        fi
 
         # Update stored checksum
         _cs_last_checksum="${current_checksum}"

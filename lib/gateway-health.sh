@@ -16,6 +16,7 @@ _gh_network_was_down=false
 _gh_last_uptime=0
 _gh_proxy_fail_count=0
 _gh_loop_count=0
+_gh_restart_times=()          # restart timestamps for budget limiting
 
 # === Exponential Backoff Engine ===
 # Returns 0 if we should restart now, 1 if we should keep waiting.
@@ -84,8 +85,33 @@ in_cooldown() {
     (( elapsed < COOLDOWN ))
 }
 
+_gh_prune_restart_times() {
+    local now
+    now="$(now_epoch)"
+    local kept=()
+    for t in "${_gh_restart_times[@]:-}"; do
+        [[ -z "${t}" ]] && continue
+        if (( now - t <= RESTART_WINDOW_SEC )); then
+            kept+=("${t}")
+        fi
+    done
+    _gh_restart_times=("${kept[@]:-}")
+}
+
+_gh_restart_budget_exceeded() {
+    _gh_prune_restart_times
+    (( ${#_gh_restart_times[@]} >= RESTART_MAX_IN_WINDOW ))
+}
+
 do_restart() {
     local reason="$1"
+
+    # Diagnostic freeze: observe only
+    if [[ -f "${DIAG_FREEZE_FLAG}" ]]; then
+        log_warn "FREEZE: diagnostic freeze enabled (${DIAG_FREEZE_FLAG}); skip restart reason=${reason}"
+        return 1
+    fi
+
     if in_cooldown; then
         local now elapsed
         now="$(now_epoch)"
@@ -93,8 +119,16 @@ do_restart() {
         log_info "COOLDOWN: skipping restart (${elapsed}s/${COOLDOWN}s), reason=${reason}"
         return 1
     fi
+
+    if _gh_restart_budget_exceeded; then
+        log_error "BUDGET: restart budget exceeded (${RESTART_MAX_IN_WINDOW}/${RESTART_WINDOW_SEC}s). skip restart reason=${reason}"
+        return 1
+    fi
+
     restart_gateway "${reason}"
     _gh_last_restart="$(now_epoch)"
+    _gh_restart_times+=("${_gh_last_restart}")
+
     backoff_reset
     _gh_proxy_fail_count=0
 }
