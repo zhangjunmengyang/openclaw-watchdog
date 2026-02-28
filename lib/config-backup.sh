@@ -50,8 +50,9 @@ _cb_collect_files() {
     fi
 
     # Custom tracked directories (user-configurable)
-    if [[ -n "${BACKUP_TRACKED_DIR}" ]]; then
-        for entry in ${BACKUP_TRACKED_DIR}; do
+    local tracked_dirs="${BACKUP_TRACKED_DIR:-}"
+    if [[ -n "${tracked_dirs}" ]]; then
+        for entry in ${tracked_dirs}; do
             local name="${entry%%:*}"
             local path="${entry#*:}"
             path="${path/#\~/$HOME}"

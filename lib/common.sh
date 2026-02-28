@@ -120,9 +120,22 @@ watchdog_init() {
 
 get_uptime_seconds() {
     if [[ "${OS_TYPE}" == "Darwin" ]]; then
-        local boot_sec
-        boot_sec="$(/usr/sbin/sysctl -n kern.boottime 2>/dev/null | sed 's/.*sec = \([0-9]*\).*/\1/')"
-        echo $(( $(date +%s) - boot_sec ))
+        local boot_sec sysctl_cmd
+        if [[ -x /usr/sbin/sysctl ]]; then
+            sysctl_cmd="/usr/sbin/sysctl"
+        elif command -v sysctl >/dev/null 2>&1; then
+            sysctl_cmd="sysctl"
+        else
+            log_error "get_uptime_seconds: sysctl unavailable; fallback to 0"
+            echo 0
+            return
+        fi
+        boot_sec="$(${sysctl_cmd} -n kern.boottime 2>/dev/null | sed 's/.*sec = \([0-9]*\).*/\1/')"
+        if [[ -z "${boot_sec}" ]]; then
+            echo 0
+        else
+            echo $(( $(date +%s) - boot_sec ))
+        fi
     else
         cut -d. -f1 /proc/uptime 2>/dev/null || echo 0
     fi
