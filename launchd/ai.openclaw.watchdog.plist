@@ -31,7 +31,7 @@
         <key>HOME</key>
         <string>__HOME__</string>
         <key>PATH</key>
-        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/sbin</string>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/sbin:/usr/sbin</string>
     </dict>
 
     <key>ThrottleInterval</key>

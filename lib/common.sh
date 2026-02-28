@@ -50,6 +50,7 @@ SNAPSHOT_RETENTION="${SNAPSHOT_RETENTION:-20}"
 # Config backup
 BACKUP_INTERVAL="${BACKUP_INTERVAL:-3600}"
 BACKUP_RETENTION="${BACKUP_RETENTION:-30}"
+BACKUP_TRACKED_DIR="${BACKUP_TRACKED_DIR:-}"
 
 # Stability safety switches
 DIAG_FREEZE_FLAG="${DIAG_FREEZE_FLAG:-$HOME/.openclaw/watchdog/diagnostic.freeze}"
@@ -120,7 +121,7 @@ watchdog_init() {
 get_uptime_seconds() {
     if [[ "${OS_TYPE}" == "Darwin" ]]; then
         local boot_sec
-        boot_sec="$(sysctl -n kern.boottime | sed 's/.*sec = \([0-9]*\).*/\1/')"
+        boot_sec="$(/usr/sbin/sysctl -n kern.boottime 2>/dev/null | sed 's/.*sec = \([0-9]*\).*/\1/')"
         echo $(( $(date +%s) - boot_sec ))
     else
         cut -d. -f1 /proc/uptime 2>/dev/null || echo 0
