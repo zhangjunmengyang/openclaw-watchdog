@@ -97,16 +97,16 @@ cmd_start() {
         loop_count=$(( loop_count + 1 ))
 
         # Module 1: Gateway health (every tick)
-        gateway_health_tick
+        gateway_health_tick || log_error "gateway_health_tick failed (exit=$?)"
 
         # Module 2: Agent heartbeat (self-rate-limited)
-        agent_heartbeat_tick
+        agent_heartbeat_tick || log_error "agent_heartbeat_tick failed (exit=$?)"
 
         # Module 3: Config safeguard (every tick)
-        config_safeguard_tick
+        config_safeguard_tick || log_error "config_safeguard_tick failed (exit=$?)"
 
         # Module 4: Config backup (self-rate-limited)
-        config_backup_tick
+        config_backup_tick || log_error "config_backup_tick failed (exit=$?)"
 
         # Periodic log trim
         if (( loop_count % 100 == 0 )); then
